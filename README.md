@@ -88,7 +88,7 @@ one directory per plugin.
 ### From the registry / a clone
 
 ```sh
-git clone https://github.com/<owner>/dms-jira \
+git clone https://github.com/Klievan/dms-jira \
     ~/.config/DankMaterialShell/plugins/dms-jira
 dms restart   # or just reload, below
 ```
