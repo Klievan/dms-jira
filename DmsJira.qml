@@ -137,6 +137,11 @@ PluginComponent {
     // Surface the last refresh error to the popout. Empty when healthy.
     property string lastError: ""
 
+    // Our own Jira accountId, resolved lazily from /myself the first time we
+    // need to scan comments for @mentions. Mention nodes in ADF carry the
+    // accountId, not the email, so we can't match without it.
+    property string _accountId: ""
+
     // Map a Jira issue type name to a Material Symbol icon.
     function typeIcon(name) {
         switch ((name || "").toLowerCase()) {
@@ -225,6 +230,13 @@ PluginComponent {
             root.lastError = "Site URL and email not configured"
             return
         }
+        // Snapshot the previous poll's state *before* we overwrite it, so the
+        // notification diff compares new-vs-old rather than new-vs-new.
+        const prevPollAt = lastPollAt.value || 0
+        const prevKeys = {}
+        const prevCache = cachedIssues.value || []
+        for (let i = 0; i < prevCache.length; i++) prevKeys[prevCache[i].key] = true
+
         client.search(root.jql, function (err, results) {
             if (err) {
                 const msg = (err && err.message) ? err.message : String(err)
@@ -235,8 +247,111 @@ PluginComponent {
             root.lastError = ""
             cachedIssues.set(results)
             lastPollAt.set(Date.now())
-            // TODO: diff against previous cache for notifications.
+
+            // First poll ever (no prior timestamp): just seed state, never
+            // notify — otherwise every existing ticket/comment would alert.
+            if (prevPollAt <= 0) {
+                if (root.notifyMentioned) root._scanComments(results, 0)
+                return
+            }
+            if (root.notifyAssigned) {
+                for (let i = 0; i < results.length; i++) {
+                    const it = results[i]
+                    if (!prevKeys[it.key]) {
+                        root.notify("Jira: ticket assigned to you",
+                            it.key + " · " + ((it.fields && it.fields.summary) || ""))
+                    }
+                }
+            }
+            if (root.notifyMentioned) root._checkMentions(results, prevPollAt)
         })
+    }
+
+    // ---- @mention notifications ----
+    //
+    // For each currently-assigned open ticket, fetch its recent comments and
+    // alert on any created since the previous poll whose ADF body mentions us.
+    // Gated behind the (off-by-default) "@mentions" toggle because it costs
+    // one extra request per open ticket.
+
+    function _checkMentions(issues, sinceMs) {
+        if (!issues || issues.length === 0) return
+        if (root._accountId) { root._scanComments(issues, sinceMs); return }
+        client.myself(function (err, me) {
+            if (err) {
+                console.warn("[dms-jira] /myself failed:", (err && err.message) || err)
+                return
+            }
+            root._accountId = (me && me.accountId) || ""
+            if (root._accountId) root._scanComments(issues, sinceMs)
+        })
+    }
+
+    function _scanComments(issues, sinceMs) {
+        const seeding = !(sinceMs > 0)         // first run: record, don't alert
+        const seen = {}
+        const known = seenCommentIds.value || []
+        for (let i = 0; i < known.length; i++) seen[known[i]] = true
+
+        const fresh = []
+        let pending = issues.length
+        function done() {
+            if (--pending > 0) return
+            if (fresh.length === 0) return
+            let merged = (seenCommentIds.value || []).concat(fresh)
+            if (merged.length > 400) merged = merged.slice(merged.length - 400)
+            seenCommentIds.set(merged)
+        }
+
+        for (let i = 0; i < issues.length; i++) {
+            const issue = issues[i]
+            client.getComments(issue.key, function (err, comments) {
+                if (err) { done(); return }
+                for (let j = 0; j < comments.length; j++) {
+                    const c = comments[j]
+                    const id = c && c.id ? String(c.id) : ""
+                    if (!id || seen[id]) continue
+                    seen[id] = true
+                    fresh.push(id)
+                    if (seeding) continue
+                    const createdMs = root._parseJiraDate(c.created || c.updated)
+                    if (!isFinite(createdMs) || createdMs < sinceMs) continue
+                    if (!root._bodyMentionsMe(c.body)) continue
+                    const who = (c.author && c.author.displayName) || "Someone"
+                    root.notify("Jira: " + who + " mentioned you",
+                        issue.key + " · " + ((issue.fields && issue.fields.summary) || ""))
+                }
+                done()
+            })
+        }
+    }
+
+    // Jira timestamps use ±HHMM offsets ("2026-05-11T09:12:00.000+0000");
+    // normalize to ±HH:MM so Date.parse handles them on every engine.
+    function _parseJiraDate(s) {
+        if (!s) return NaN
+        return Date.parse(String(s).replace(/([+-]\d{2})(\d{2})$/, "$1:$2"))
+    }
+
+    // Walk an ADF node tree looking for a mention node targeting our accountId.
+    function _bodyMentionsMe(node) {
+        if (!node || typeof node !== "object") return false
+        if (node.type === "mention" && node.attrs && node.attrs.id === root._accountId)
+            return true
+        const kids = node.content
+        if (Array.isArray(kids)) {
+            for (let i = 0; i < kids.length; i++)
+                if (root._bodyMentionsMe(kids[i])) return true
+        }
+        return false
+    }
+
+    // Fire a desktop notification. DankMaterialShell is the notification
+    // daemon, so a plain libnotify message renders natively; `-a` sets the
+    // app name shown on the popup. No-op if `notify-send` isn't installed.
+    function notify(summary, body) {
+        Quickshell.execDetached(
+            ["notify-send", "-a", "Jira Tickets", String(summary), String(body || "")])
     }
 
     Component.onCompleted: refresh()

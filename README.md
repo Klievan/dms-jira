@@ -45,6 +45,10 @@ This plugin closes that gap:
   runs.
 - **Bring your own JQL.** The default is "my open tickets, freshest first."
   Swap in any query you like.
+- **Optional nudges.** Turn on desktop notifications for two things only —
+  a ticket newly assigned to you, and a new comment that **@mentions you** on
+  one of your open tickets. Both are off by default and intentionally narrow
+  (no firehose of status-change noise).
 - **Demo mode.** Flip one toggle to replace live data with fake‑but‑plausible
   tickets across three made‑up projects — perfect for screenshots, screen
   shares, or trying the UI before you wire up credentials.
@@ -59,6 +63,10 @@ This plugin closes that gap:
   below). Jira Data Center / Server is not supported yet (see [Roadmap](#roadmap)).
 - **`wl-clipboard`** — the *Copy key* / *Copy branch* actions shell out to
   `wl-copy` (Wayland).
+- **`notify-send`** (from `libnotify`) — *only* if you enable notifications;
+  alerts are delivered as standard libnotify messages, which DMS renders
+  natively. Package: `libnotify-bin` on Debian/Ubuntu, `libnotify` on
+  Arch / NixOS.
 - **`secret-tool`** (from `libsecret`) — *optional, but recommended for
   secure token storage.* Needed only if you pick the libsecret token source,
   which keeps the API token in your encrypted keyring instead of a plaintext
@@ -67,8 +75,8 @@ This plugin closes that gap:
   Debian/Ubuntu, `libsecret` on Arch / NixOS.
 
 The plugin requests these DMS permissions: `network` (Jira REST calls),
-`process` (run `wl-copy`, `cat`, `secret-tool`), and `settings_read` /
-`settings_write` (its own config).
+`process` (run `wl-copy`, `notify-send`, `cat`, `secret-tool`), and
+`settings_read` / `settings_write` (its own config).
 
 ---
 
@@ -173,9 +181,13 @@ on the email you configured.
 | **Show active ticket key on bar** | On: pill shows `KEY · count`. Off: just the count. |
 | **Prefix branch name with issue type** | Adds `feature/` · `bug/` · `chore/` (derived from `issuetype`) when copying branch names. |
 | **Group by project** | Groups the popout list under per‑project headers. |
-| **New assignment** notification | *(toggle present; delivery is on the [roadmap](#roadmap))* |
-| **@mentions** notification | *(toggle present; delivery is on the [roadmap](#roadmap))* |
+| **New assignment** notification | Off by default. When on, sends a desktop notification when a ticket appears in your list that wasn't there on the previous poll. Needs `notify-send`. |
+| **@mentions** notification | Off by default. When on, after each poll the plugin checks recent comments on your open tickets and notifies you about any new one whose body @mentions you. Costs one extra API request per open ticket; needs `notify-send`. |
 | **Demo mode** | Replaces live tickets with fake data and skips the Jira API entirely. Safe for screenshots. |
+
+> The first poll after install only *seeds* state — it never fires
+> notifications, so you don't get alerted about every ticket and comment that
+> already exists. Alerts start from the next poll onward.
 
 ### Using the widget
 
@@ -219,6 +231,7 @@ on the email you configured.
 | `token file is empty or unreadable: …` | The path must be **absolute** and readable by your user; the file must be non‑empty. |
 | `no token in keyring for this email …` | Run the `secret-tool store … service dms-jira account <email>` command, with the same email you configured. |
 | *Copy key* / *Copy branch* do nothing | Install `wl-clipboard` (provides `wl-copy`). |
+| Notifications never appear | Install `libnotify` (provides `notify-send`), confirm a notification daemon is running, and remember the first poll after install is silent by design. |
 | Widget doesn't show after cloning | `dms ipc call plugins reload dmsJira`, or restart the shell, then enable it in Settings → Plugins. |
 
 The plugin uses Jira Cloud's `/rest/api/3/search/jql` endpoint (the
@@ -228,9 +241,8 @@ token‑paginated successor to the legacy `/search`).
 
 ## Roadmap
 
-- **Notification delivery** — the *New assignment* and *@mentions* toggles
-  exist; wiring them to `dms ipc call notifications send` (with diff‑based
-  dedupe against the previous poll) is the next milestone.
+- **Richer notification rules** — per-project filters, quiet hours, and
+  optionally folding multiple new assignments into one summary alert.
 - **Light markdown in comments** — bold / italic / `code` / lists, via the
   in‑tree ADF builder (no external dependency).
 - **Jira Data Center / Server** — `JiraClient.qml` already isolates every
@@ -248,7 +260,7 @@ dms-jira/
 ├── plugin.json          # manifest (id, permissions, entry points)
 ├── DmsJira.qml          # PluginComponent — bar pill, popout, row actions
 ├── DmsJiraSettings.qml  # PluginSettings — the config UI above
-├── JiraClient.qml       # Jira REST v3 wrapper (search, transitions, comment)
+├── JiraClient.qml       # Jira REST v3 wrapper (search, transitions, comments, /myself)
 ├── AdfBuilder.js        # plain text → Atlassian Document Format
 ├── assets/
 │   └── screenshot.png

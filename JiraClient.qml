@@ -185,4 +185,21 @@ QtObject {
         _request("POST", "/rest/api/3/issue/" + key + "/comment",
             { body: Adf.fromPlainText(plainText) }, cb)
     }
+
+    // Current user — used to resolve our own accountId so we can detect
+    // @mentions in comment bodies (mention nodes carry accountId, not email).
+    function myself(cb) {
+        _request("GET", "/rest/api/3/myself", null, cb)
+    }
+
+    // Recent comments on an issue, newest first. Capped — we only ever look
+    // at comments newer than the previous poll, so a small page is plenty.
+    function getComments(key, cb) {
+        try { key = _validatedKey(key) } catch (e) { return cb(e) }
+        _request("GET", "/rest/api/3/issue/" + key +
+            "/comment?orderBy=-created&maxResults=20", null, function (err, body) {
+            if (err) return cb(err)
+            cb(null, (body && body.comments) || [])
+        })
+    }
 }
